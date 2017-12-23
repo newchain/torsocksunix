@@ -1,0 +1,254 @@
+#include <tunables/global>
+
+/etc/qubes-rpc/qubes.TorSocksControl {
+
+	#include <abstractions/exe/bin.dash>
+
+	/			r,
+
+#	/dev/null		wc,
+	/dev/null		w,
+
+	/etc/cpfpy.d/		r,
+
+owner	/etc/qubes-rpc/qubes.TorSocksControl	r,
+
+	/bin/{cat,mkdir,touch}	Px -> TorSocksControl_files,
+	/bin/{grep,sed,sleep}	Px -> TorSocksControl_nofiles,
+	/usr/bin/{cut,env,tail,tr}	Px -> TorSocksControl_nofiles,
+
+	/bin/setfacl		Px -> TorSocksControl_setfacl,
+	/bin/dash 		Px -> TorSocksControl_dash,
+	/usr/bin/unshare	Px -> TorSocksControl_unshare,
+
+#owner	/var/log/torsockscontrol/torsockscontrol.log	acw,
+owner	/var/log/torsockscontrol/torsockscontrol.log	w,
+}
+
+
+## For stacked intersections
+#
+#profile TorSocksControl_upperbound flags=(complain) {
+#
+##include <abstractions/exe/bin.cat>
+##include <abstractions/exe/bin.dash>
+##include <abstractions/exe/bin.grep>
+##include <abstractions/exe/bin.mkdir>
+##include <abstractions/exe/bin.sed>
+##include <abstractions/exe/bin.setfacl>
+##include <abstractions/exe/bin.sleep>
+##include <abstractions/exe/bin.touch>
+##include <abstractions/exe/usr.bin.cut>
+##include <abstractions/exe/usr.bin.env>
+##include <abstractions/exe/usr.bin.setpriv>
+##include <abstractions/exe/usr.bin.socat>
+##include <abstractions/exe/usr.bin.tail>
+##include <abstractions/exe/usr.bin.tr>
+##include <abstractions/exe/usr.bin.unshare>
+#
+#	/bin/{cat,mkdir,touch}	Px -> TorSocksControl_files,
+#	/bin/{grep,sed,sleep}	Px -> TorSocksControl_nofiles,
+#	/usr/bin/{cut,env,tail,tr}	Px -> TorSocksControl_nofiles,
+#
+#	/bin/dash 		Px -> TorSocksControl_dash,
+#	/bin/setfacl		Px -> TorSocksControl_setfacl,
+#	/usr/bin/setpriv	Px -> TorSocksControl_setpriv,
+#	/usr/bin/socat		Px -> TorSocksControl_socat,
+#	/usr/bin/unshare	Px -> TorSocksControl_unshare,
+#
+##	/dev/null		wc,
+#	/dev/null		w,
+#
+#	/etc/cpfpy.d/		r,
+#	/etc/cpfpy.d/*.conf	r,
+#
+#deny	/etc/locale.alias		r,
+#
+#	/etc/nsswitch.conf		r,
+#	  /lib{,/}@{multiarch}/libnss_compat-2.??.so	mr,
+#	    /lib{,/}@{multiarch}/libnsl-2.??.so		mr,
+#	  /lib{,/}@{multiarch}/libnss_files-2.??.so	mr,
+#	    /etc/group			r,
+#	    /etc/passwd			r,
+#deny	  /lib{,/}@{multiarch}/libnss_nis-2.??.so	mr,
+#
+#owner	/etc/qubes/torsockscontrol.conf	r,
+#
+#owner	/etc/qubes-rpc/qubes.TorSocksControl	r,
+#
+#owner	/{,var/}run/torsockscontrol		w,
+#
+#owner	/rw/config/torsockscontrol.conf	r,
+#
+#deny	/usr/lib/locale/[a-zA-Z]*/LC_**		r,
+#deny	/usr/lib{/,}@{multiarch}/gconv/gconv-modules.cache	r,
+#
+#owner	/usr/share/qubes/torsockscontrol.conf	r,
+#
+##owner	/var/log/torsockscontrol			w,
+##owner	/var/log/torsockscontrol/torsockscontrol.log	acw,
+#owner	/var/log/torsockscontrol/torsockscontrol.log	w,
+#
+#	capability fowner,
+#	capability fsetid,
+#	capability setgid,
+#	capability setpcap,
+#	capability setuid,
+#	capability sys_chroot,
+#}
+
+
+profile TorSocksControl_files {
+
+#include <abstractions/exe/bin.cat>
+#include <abstractions/exe/bin.mkdir>
+#include <abstractions/exe/bin.touch>
+
+	/dev/null		w,
+
+	/etc/cpfpy.d/*.conf	r,
+
+deny	/etc/locale.alias	r,
+
+owner	/etc/qubes/torsockscontrol.conf	r,
+
+owner	/{,var/}run/torsockscontrol	w,
+
+owner	/rw/config/torsockscontrol.conf	r,
+
+deny	/usr/lib/locale/[a-zA-Z]*/LC_**			r,
+deny	/usr/lib{/,}@{multiarch}/gconv/gconv-modules.cache	r,
+
+owner	/usr/share/qubes/torsockscontrol.conf		r,
+
+owner	/var/log/torsockscontrol			w,
+owner	/var/log/torsockscontrol/torsockscontrol.log	w,
+}
+
+
+profile TorSocksControl_nofiles {
+
+#include <abstractions/exe/bin.grep>
+#include <abstractions/exe/bin.sed>
+#include <abstractions/exe/bin.sleep>
+#include <abstractions/exe/usr.bin.cut>
+#include <abstractions/exe/usr.bin.env>
+#include <abstractions/exe/usr.bin.tail>
+#include <abstractions/exe/usr.bin.tr>
+
+	/dev/null		w,
+
+deny	/etc/locale.alias	r,
+
+owner	/var/log/torsocksunix/torsocksunix.log	w,
+
+deny	/usr/lib/locale/[a-zA-Z]*/LC_**		r,
+deny	/usr/lib{/,}@{multiarch}/gconv/gconv-modules.cache	r,
+}
+
+
+profile TorSocksControl_setfacl {
+
+#include <abstractions/exe/bin.setfacl>
+
+	/dev/null		w,
+
+deny	/etc/locale.alias	r,
+
+deny	/usr/lib/locale/[a-zA-Z]*/LC_**				r,
+deny	/usr/lib{/,}@{multiarch}/gconv/gconv-modules.cache	r,
+
+owner	/{,var/}run/torsockscontrol	w,
+
+	capability fowner,
+	capability fsetid,
+}
+
+
+profile TorSocksControl_unshare {
+
+#include <abstractions/exe/usr.bin.unshare>
+
+# Note: AppArmor cannot follow mount namespaces
+#	/bin/dash		PUx,
+#	/usr/bin/setpriv	PUx,
+	/bin/dash		Px -> TorSocksControl_dash,
+	/usr/bin/setpriv	Px -> TorSocksControl_setpriv,
+
+	/dev/null		w,
+
+owner	/var/log/torsockcontrol/torsockscontrol.log	w,
+
+	capability	dac_read_search,
+}
+
+
+profile TorSocksControl_setpriv {
+
+#include <abstractions/exe/usr.bin.setpriv>
+
+	/bin/dash	Px -> TorSocksControl_dash,
+
+	/dev/null		w,
+
+	/lib{,/}@{multiarch}/libnss_compat-2.??.so	mr,
+	  /lib{,/}@{multiarch}/libnsl-2.??.so		mr,
+	/lib{,/}@{multiarch}/libnss_files-2.??.so	mr,
+	  /etc/group			r,
+	  /etc/passwd			r,
+deny	/lib{,/}@{multiarch}/libnss_nis-2.??.so		mr,
+
+owner	/proc/1/status		r,
+
+owner	/var/log/torsockscontrol/torsockscontrol.log	w,
+
+	capability	setgid,
+	capability	setpcap,
+}
+
+
+profile TorSocksControl_dash {
+
+#include <abstractions/exe/bin.dash>
+
+	/bin/sleep	Px -> TorSocksControl_sleep,
+	/usr/bin/socat	Px -> TorSocksControl_socat,
+
+	/dev/null		w,
+
+owner	/var/log/torsockscontrol/torsockscontrol.log	w,
+}
+
+
+profile TorSocksControl_sleep {
+
+#include <abstractions/exe/bin.sleep>
+
+	/dev/null		w,
+
+owner	/var/log/torsockscontrol/torsockscontrol.log	w,
+}
+
+
+profile TorSocksControl_socat {
+
+#include <abstractions/exe/usr.bin.socat>
+
+	network tcp,
+
+	/dev/null		w,
+
+	/etc/nsswitch.conf		r,
+	  /lib{,/}@{multiarch}/libnss_compat-2.??.so	mr,
+	    /lib{,/}@{multiarch}/libnsl-2.??.so		mr,
+	  /lib{,/}@{multiarch}/libnss_files-2.??.so	mr,
+	    /etc/group			r,
+	    /etc/passwd			r,
+deny	  /lib{,/}@{multiarch}/libnss_nis-2.??.so	mr,
+
+	/var/log/torsockscontrol/torsockscontrol.log	w,
+
+	capability setgid,
+	capability setuid,
+	capability sys_chroot,
+}

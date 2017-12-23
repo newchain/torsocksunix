@@ -1,0 +1,659 @@
+#!/bin/sh
+#
+#    This file is part of torsocksunix.
+#
+#    TorSocksRPC is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU Affero General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    TorSocksRPC is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU Affero General Public License for more details.
+#
+#    You should have received a copy of the GNU Affero General Public License
+#    along with TorSocksRPC.  If not, see <https://www.gnu.org/licenses/>.
+
+#(early testing)
+#POSIXLY_CORRECT=1
+#export POSIXLY_CORRECT
+#set -o xtrace
+#exec 2>> "/var/log/torsocksunix/torsocksunix.log"
+
+set -o errexit -o noclobber -o noglob -o nounset
+
+
+assign_socket() {
+
+  if [ "$(command -v find)" != 'find' ]
+  then
+
+    totalsockslist="$(find /var/run/tor -maxdepth 1 -type s -prune -regex ^/.*/${socket_prefix}\.${socket_pattern}$ -execdir basename '{}' + | cut -d '.' -f 2 -- -)"
+
+  else
+
+    find_socket_pattern="${socket_pattern}"
+
+    if [ "${find_socket_pattern%%+}" != "${find_socket_pattern}" ]
+    then
+
+      # busybox find does not support + or atoms
+      find_socket_pattern="${find_socket_pattern%%+}*"
+
+    fi
+
+    # busybox does not support execdir
+    totalsockslist=
+    for socket in $(find /var/run/tor -maxdepth 1 -type s -prune -regex "^/.*/${socket_prefix}\.${find_socket_pattern}$")
+    do
+
+      totalsockslist="${totalsockslist} $(basename ${socket} | cut -d '.' -f 2 -- -)"
+
+    done
+
+    unset find_socket_pattern
+
+  fi
+
+  log_info "totalsockslist is ${totalsockslist}"
+  totalsockscount="$(printf '%b\n' ${totalsockslist} | wc -l --)"
+  log_info "totalsockscount is ${totalsockscount}"
+  usedsockslist="$(cat -- ${mapfile} | tail -n +2 -- - | cut -d '=' -f 2 -- -)"
+  log_info "usedsockslist is ${usedsockslist}"
+  usedsockscount="$(printf '%b\n' ${usedsockslist} | wc -l --)"
+  log_info "usedsockscount is ${usedsockscount}"
+
+  if [ "${usedsockscount:-0}" -ge "${totalsockscount}" ]
+  then
+
+    sleep "$(gen_number ${sleepiness:-10})"
+    log_error 'No sockets available'
+
+  fi
+
+  freesockslist="$(printf '%b\n' ${totalsockslist} ${usedsockslist} | tr ' ' '\n' | sort -- - | uniq -u -- -)"
+  freesockscount="$(( ${totalsockscount} - ${usedsockscount} ))"
+  sockindex="$(( $(gen_number $(( ${freesockscount} - 1 ))) + 1 ))"
+  socket="$(printf '%b\n' ${freesockslist} | tr ' ' '\n' | tail -n +${sockindex} -- - | head -n 1 -- -)"
+  printf "${socket}"
+
+  unset freesockscount freesockslist sockindex totalsockscount totalsockslist usedsockscount usedsockslist
+}
+
+
+#check_installed() {
+
+#  for util in basename bc cat cut find grep head mkdir rev sed setfacl sha512sum sh shuf socat sort tail touch wc
+#  do
+
+#    command -v "${util}" || log_error "${util} is not in ${PATH}"
+
+#  done
+
+#  command -v openssl || command -v hexdump ||  log_error 'Neither openssl nor hexdump are in PATH'
+#}
+
+
+clean_env() {
+
+  for env in $(env | cut -d '=' -f 1 -- - | sed -e '/[\ }]/d;/^$/d' -- - )
+  do
+
+    [ "${env}" = 'PATH' ] && continue
+
+    unset "${env}"
+
+  done
+}
+
+
+config() {
+
+  cd '/'
+
+  if [ "${testing:-0}" != '0' ] && [ -z "${QREXEC_SERVICE_ARGUMENT:-}" ] && [ -z "${QREXEC_REMOTE_DOMAIN:-}" ]
+  then
+
+    QREXEC_SERVICE_ARGUMENT="$(openssl rand -hex 64 | sha512sum -- - | cut -d ' ' -f 1 -- - | sed -re 's/^[a-f0-9]{84}//g' -- -)}"
+
+  fi
+
+  unset QREXEC_REMOTE_DOMAIN
+
+  if [ -e '/rw/config/torsocksunix.conf' ]
+  then
+
+    configfile='/rw/config/torsocksunix.conf'
+
+  elif [ -e '/etc/qubes/torsocksunix.conf' ]
+  then
+
+    configfile='/etc/qubes/torsocksunix.conf'
+
+  elif [ -e '/usr/share/qubes/torsocksunix.conf' ]
+  then
+
+    configfile='/usr/share/qubes/torsocksunix.conf'
+
+  fi
+
+  if [ -n "${configfile:-}" ]
+  then
+
+    config="$(cat -- ${configfile} | grep -e '^[a-zA-Z]' -- - | tr ' ' '=')"
+
+    for pair in $(printf '%b\n'  ${config})
+    do
+
+      readonly ${pair}
+
+    done
+
+  fi
+
+  unset config configfile || true
+
+  [ -z "${mapdir:-}" ] && readonly mapdir='/var/run/torsocksunix'
+  mapfile="${mapdir}/map"
+
+  [ -z "${client_secret_chars:-}" ] && readonly client_secret_chars='[0-9a-fA-F]'
+  [ -z "${client_secret_max:-}" ] && readonly client_secret_max=44
+  [ -z "${server_hash_chars:-}" ] && readonly server_hash_chars='[0-9A-F]'
+  [ -z "${server_hash_length:-}" ] && readonly server_hash_length=128
+  [ -z "${server_secret_chars:-}" ] && readonly server_secret_chars='[0-9A-F]'
+  [ -z "${server_secret_length:-}" ] && readonly server_secret_length=128
+  [ -z "${socket_prefix:-}" ] && readonly socket_prefix='socks'
+  [ -z "${socket_pattern:-}" ] && readonly socket_pattern='[0-9]+'
+
+  [ -z "${torrundir:-}" ] && readonly torrundir='/var/run/tor'
+  [ -z "${user:-}" ] && readonly user='torsocksunix'
+
+  [ -z "${lockdir:-}" ] && lockdir='/var/lock/torsocksunix'
+  readonly lockfile="${lockdir}/torsocksunix.lock"
+}
+
+
+gen_number() {
+
+  remainder="$(( ${1} + 1 ))"
+  remainder="$(echo 'obase=16;ibase=10;'${remainder} | BC_LINE_LENGTH=0 bc)"
+
+  printf "$(echo 'obase=10;ibase=16;'$(gen_secret | rev) % ${remainder} | BC_LINE_LENGTH=0 bc)"
+
+  unset remainder
+}
+
+
+gen_secret() {
+
+  if command -v openssl >>/dev/null
+  then
+
+    printf "$(openssl rand -hex 64 | sha512sum -- - | cut -d ' ' -f 1 -- - | tr [:lower:] [:upper:])"
+
+  else
+
+    [ -e '/dev/urandom' ] || log_error 'urandom is not accessible' mac hexdump
+    [ -r '/dev/urandom' ] || log_error 'urandom is not random' mac hexdump
+
+    printf "$(hexdump -n 64 -e '/2 "%u"' -- '/dev/urandom' | sha512sum -- - | cut -d ' ' -f 1 -- - | tr [:lower:] [:upper:])"
+
+  fi
+}
+
+
+get_socket() {
+
+  if ! [ -e "${mapdir}" ]
+  then
+
+    mkdir -- "${mapdir}" || log_error 'Unable to create mappings dir'
+
+  fi
+
+  lock
+
+  if ! [ -e "${mapfile}" ]
+  then
+
+    touch -- "${mapfile}" || log_error 'Unable to create mapping file'
+
+  fi
+
+  lines="$(cat -- ${mapfile} |  wc -l --)"
+
+  if [ "${lines}" -ge 2 ]
+  then
+
+    server_secret="$(cat -- ${mapfile} | head -n 1 -- - | grep -Ee ^${server_secret_chars}{${server_secret_length},}$ -- -)"
+
+    if [ -z "${server_secret}" ]
+    then
+
+      log_error 'Missing server secret'
+
+    fi
+
+    map="$(printf ${client_secret}${server_secret} | sha512sum -- - | cut -d ' ' -f 1 -- - | tr [:lower:] [:upper:])"
+    socket="$(cat -- ${mapfile} | grep -Ee ^${map}=${socket_pattern}$ -- - | cut -d '=' -f 2 -- -)"
+
+    if [ -z "${socket:-}" ]
+    then
+
+      readonly socket="$(assign_socket)"
+      [ -z "${socket}" ] && log_error 'Invalid socket'
+      cp -- "${mapfile}" "${mapfile}.new"
+      log_info 'Attempting to join map and socket into mapfile'
+      printf '%b\n' "${map}=${socket}" >> "${mapfile}.new"
+
+      if ! [ "$(cat -- ${mapfile}.new ${mapfile} | sort -- | uniq -u -- | grep -e ^${map}=${socket}$ -- -)" ]
+      then
+
+        log_error 'Unable to write new mapping to tmp mapfile'
+
+      fi
+
+      log_info 'Moving new mapfile over mapfile'
+      mv -- "${mapfile}.new" "${mapfile}"
+
+    fi
+
+    touch -- "${mapfile}.new" || log_error 'Unable to create tmp mapfile. Race?'
+    cat -- "${mapfile}" | head -n 1 -- - | cat -- - >> "${mapfile}.new"
+    cat -- "${mapfile}" | tail -n +2 -- - | sort -u -- - | shuf | cat -- - >> "${mapfile}.new"
+
+    if [ "$(cat -- ${mapfile} | sort -u -- -)" != "$(cat -- ${mapfile}.new | sort -u -- -)" ]
+    then
+
+      log_error 'Mapfile corrupted'
+
+    fi
+
+  else
+
+    if [ "${lines}" -eq 1 ]
+    then
+
+      log_error 'Corrupted maplist file'
+
+    fi
+
+    touch -- "${mapfile}.new" || log_error 'Unable to create tmp mapping file'
+
+    server_secret="$(gen_secret)"
+
+    printf '%b\n' "${server_secret}" >> "${mapfile}.new"
+
+    map="$(printf ${client_secret}${server_secret} | sha512sum -- - | cut -d ' ' -f 1 -- - | tr [:lower:] [:upper:])"
+    readonly socket="$(assign_socket)"
+    [ -z "${socket}" ] && log_error 'Invalid socket'
+
+    log_info 'Attempting to join map and socket into mapfile.'
+    printf '%b\n' "${map}=${socket}" >> "${mapfile}.new"
+
+    if ! [ "$(cat ${mapfile}.new | tail -n +2 | grep -e ^${map}=${socket}$ -- -)" ]
+    then
+
+      log_error 'Unable to write new mapping to mapfile'
+
+    fi
+
+  fi
+
+  log_info 'Moving new mapfile over mapfile'
+  mv -- "${mapfile}.new" "${mapfile}"
+
+  unlock
+  unset lines map server_secret
+}
+
+
+lock() {
+
+  sleep "0.0$(gen_number ${jitter:-10})" || true
+
+  locksleep_actual="$(gen_number ${locksleep:-100})"
+  lockwait_actual="$(gen_number ${lockwait:-20})"
+  lockwait_actual="$(( 100 - ${lockwait_actual} ))"
+
+  # busybox flock does not support -w, `sleep`ing while waiting in place of -w
+  # results in races
+  flock_exe="$(command -v flock)"
+  [ "${flock_exe}" = 'flock' ] && readonly flock_exe='/usr/bin/flock'
+
+  [ -e "${lockfile}" ] || touch -- "${lockfile}"
+
+  exec 9<> "${lockfile}"
+
+  wait=0
+
+  until "${flock_exe}" -w "0.${locksleep_actual}" 9
+  do
+
+    wait="$(( ${wait} + 1 ))"
+    [ "${wait}" -ge "${lockwait_actual}" ] && log_error 'Timed out waiting for lock.'
+
+  done
+
+  unset locksleep_actual lockwait_actual wait
+}
+
+
+log_error() {
+
+  if [ "${2:-}" != 'mac' ]
+  then
+
+    unlock
+
+    printf '%b\n' "${1}" >>"${logfile}"
+
+    exit 1
+
+  elif [ "${mac:-1}" -eq 1 ] && [ "${2:-}" = 'mac' ] && [ -n "${3:-}" ]
+  then
+
+    log_warning "${1} MAC is enabled, and so different priviliges between ${3} and ${0} are assumed in place of an error."
+
+  elif [ "${mac:-1}" -eq 1 ] && [ "${2:-}" = 'mac' ]
+  then
+
+    log_warning "${1} Permission on this object must be enabled for ${0}.  You may need to change your policy."
+
+  else
+
+    unlock
+
+    printf '%b\n' "${1}" >>"${logfile}"
+
+    exit 1
+
+  fi
+}
+
+
+log_info() {
+
+  if [ "${testing:-0}" = '1' ]
+  then
+
+    printf '%b\n' "${1}" >>"${logfile}"
+
+  fi
+}
+
+
+log_setup() {
+
+  [ -n "${logdir:-}" ] || logdir='/var/log/torsocksunix'
+
+  if [ "${notraces:-1}" != '0' ] && [ "${testing:-0}" = '0' ]
+  then
+
+    readonly logfile='/dev/null'
+
+  elif [ "${splitlog:-0}" = '0' ]
+  then
+
+    readonly logfile="${logdir}/torsocksunix.log"
+
+    [ -e "${logdir}" ] || mkdir -m 0300 -- "${logdir}"
+    [ -e "${logfile}" ] || touch -- "${logfile}"
+
+  else
+
+    readonly logfile="${logdir}/torsocksunix-${$}.log"
+
+    [ -e "${logdir}" ] || mkdir -m 0300 -- "${logdir}"
+    [ -e "${logfile}" ] || touch -- "${logfile}"
+
+  fi
+
+  exec 2>> "${logfile}"
+
+  if [ "${testing:-0}" != '0' ]
+  then
+
+    set -o xtrace
+
+    [ -n "${hangtime:-}" ] || readonly hangtime='-2m'
+
+    POSIXLY_CORRECT=1
+    export POSIXLY_CORRECT
+
+  else
+
+    [ -n "${hangtime:-}" ] || readonly hangtime='0'
+
+  fi
+
+  [ -e "${lockdir}" ] || mkdir -m 0300  -- "${lockdir}" || log_error 'Unable to create lockdir.'
+  [ -e "${lockfile}" ] || touch -- "${lockfile}" || log_error 'Unable to create lockfile.'
+
+  [ -e "${lockfile}" ] || log_error "lockfile is not accessible by ${0}."
+}
+
+
+log_warning() {
+
+  printf '%b\n' "${1}" >>"${logfile}"
+}
+
+
+read_client_secret() {
+
+  [ -z "${client_shutdown_word:-}" ] && client_shutdown_word='-'
+  want_shutdown=0
+
+  # Currently limited to 45 characters.
+  # One is needed for shutdown, so...
+  #
+  if [ "${#QREXEC_SERVICE_ARGUMENT}" -lt 129 ] && printf "${QREXEC_SERVICE_ARGUMENT}" | grep -Eqe "^${client_secret_chars}{$(( ${client_secret_max} + 1 )),}$" -- -
+  then
+
+    log_error 'Client secret truncated'
+
+  else
+
+    client_secret="${QREXEC_SERVICE_ARGUMENT%${client_shutdown_word}}"
+
+  fi
+
+  if [ "$(printf  ${QREXEC_SERVICE_ARGUMENT} | cut -d '-' -f 2 -- -)" = '' ]
+  then
+
+    want_shutdown=1
+
+  fi
+
+  unset QREXEC_SERVICE_ARGUMENT
+
+  if ! printf "${client_secret}" | grep -Eqe "^${client_secret_chars}{${client_secret_max},}$" -- -
+  then
+
+    log_error 'Invalid client secret'
+
+  fi
+}
+
+
+set_perms() {
+
+  if [ "${setperms:-0}" -ne 0 ]
+  then
+
+    set +o noglob
+    chmod o-rw -- "${torrundir}/" || log_error "Unable to remove world read-write permissions from ${torrundir}/."
+    chmod o-rw -- "${torrundir}/${socket_prefix}.*" || log_error "Unable to remove world read-write permissions from ${torrundir}/${sockprefix}.*/."
+    setfacl -m "u:${rpcuser:-root}:rx" -- "${torrundir}/" || log_error "Unable to add ACL to ${torrundir}/."
+    setfacl -m "u:${user}:x" -- "${torrundir}/" || log_error "Unable to add ACL to ${torrundir}/."
+    setfacl -m "u:${user}:rw" -- "${torrundir}/${socket_prefix}.*" || log_error "Unable to add ACL for ${torrundir}/${sockprefix}.*"
+    set -o noglob
+
+  fi
+}
+
+
+shutdown() {
+
+  if [ "${want_shutdown}" -eq 0 ]
+  then
+
+    unset want_shutdown
+    return 0
+
+  fi
+
+  unset want_shutdown
+  lock
+
+  if ! [ -e "${mapfile}" ]
+  then
+
+    log_error 'No mapping to remove'
+
+  fi
+
+  lines="$(cat -- ${mapfile} | wc -l --)"
+
+  if [ "${lines}" -le 1 ]
+  then
+
+    rm -- "${mapfile}"
+    log_error "Mapfile corrupted"
+
+  fi
+
+  server_secret="$(cat -- ${mapfile} | head -n 1 -- - | grep -Ee ^${server_secret_chars}{${server_secret_length},}$ -- -)"
+
+  if [ -z "${server_secret}" ]
+  then
+
+    log_error 'Mapfile corrupted'
+
+  fi
+
+  map="$(printf ${client_secret}${server_secret} | sha512sum -- - | cut -d ' ' -f 1 -- - | tr [:lower:] [:upper:])"
+
+  if ! cat -- "${mapfile}" | grep -qe "${map}=${socket_pattern}$" -- -
+  then
+
+    log_error 'Mapping missing'
+
+  fi
+
+  touch -- "${mapfile}.new" || log_error 'Unable to create temporary mapfile'
+  cat -- "${mapfile}" | sed -e "/^${map}=${socket_pattern}$/d" -- - | cat -- - >> "${mapfile}.new" || log_error 'Unable to remove mapping from tmp mapfile'
+
+  if ! [ "$(cat -- ${mapfile}.new ${mapfile} | sort -- | uniq -u | grep -Ee ^${server_hash_chars}{${server_hash_length},}=${socket_pattern}$ -- -)" ]
+  then
+
+    log_error 'Temporary mapfile is corrupted'
+
+  fi
+
+  lines="$(( ${lines} - 1 ))"
+
+  if [ "${lines}" -eq 1 ]
+  then
+
+    rm -- "${mapfile}.new" "${mapfile}"
+
+  else
+
+    mv -- "${mapfile}.new" "${mapfile}" || log_error 'Unable to update mapfile'
+
+  fi
+
+  unset lines map server_secret
+
+  unlock
+  log_info 'Shutdown request handled'
+  exit 0
+}
+
+
+tunnel() {
+
+  [ -z "${ip_exe:-}" ] && ip_exe="$(command -v ip 2>>/dev/null)"
+  [ -z "${sh_exe:-}" ] && sh_exe="$(command -v sh 2>>/dev/null)"
+  # if running as busybox but sh is not busybox
+  [ "${sh_exe}" = 'sh' ] && [ "$(readlink /bin/sh)" != 'busybox' ] && [ "${ip_exe}" = 'ip' ] && readonly ip_exe='/bin/ip'
+  [ "${sh_exe}" = 'sh' ] && readonly sh_exe='/bin/sh'
+  [ -z "${ip_exe:-}" ] && [ -z "${ifconfig_exe:-}" ] && readonly ifconfig_exe="$(command -v ifconfig 2>>/dev/null)"
+  [ "${hangtime}" = '0' ] || [ -z "${sleep_exe:-}" ] && readonly sleep_exe="$(command -v sleep 2>>/dev/null)"
+  [ -z "${setpriv_exe:-}" ] && readonly setpriv_exe="$(command -v setpriv 2>>/dev/null)"
+  [ -z "${socat_exe:-}" ] && readonly socat_exe="$(command -v socat 2>>/dev/null)"
+  [ -z "${unshare_exe:-}" ] && readonly unshare_exe="$(command -v unshare 2>>/dev/null)"
+  # AppArmor cannot track files across mount namespaces: "Failed name lookup - disconnected path"
+  [ "${mac:-1}" = '0' ] && [ -n "${unshare_exe:-}" ] && [ -z "${namespaces:-}" ] && readonly namespaces="imnpu"
+  [ "${mac:-1}" != '0' ] && [ -n "${unshare_exe:-}" ] && [ -z "${namespaces:-}" ] && readonly namespaces="inpu"
+
+  [ -n "${setpriv_exe:-}" ] && [ -z "${capabilities:-}" ] && readonly capabilities='+net_admin,+setgid,+setuid,+sys_chroot'
+  [ -n "${setpriv_exe:-}" ] && [ -z "${securebits:-}" ] && readonly securebits='+keep_caps_locked,+no_setuid_fixup,+no_setuid_fixup_locked'
+  [ -z "${timeout:-}" ] && readonly timeout='100'
+
+
+  #maxbandwidth='4000000'
+  #[ "${maxbandwidth:-}" != '' ] && throttle=",ospeed=${maxbandwidth}"
+  #[ "${maxbandwidth:-}" != '' ] && throttle=",b4000000"
+
+
+  clean_env
+
+
+  [ "${hangtime}" = '0' ] || hang="${sleep_exe} ${hangtime};"
+
+  [ -n "${unshare_exe:-}" ] && [ -n "${ip_exe:-}" ] && readonly loopback_down="${ip_exe} link set lo down;"
+  [ -n "${unshare_exe:-}" ] && [ -z "${ip_exe:-}" ] && [ -n "${ifconfig_exe:-}" ] && readonly loopback_down="${ifconfig_exe} lo down;"
+
+
+  readonly proxy="${socat_exe} -T ${timeout} '-,chroot='${torrundir}',su-d='${user} 'UNIX-CONNECT:/'${socket_prefix}'.'${socket}',dontroute,reuseaddr,type=1'"
+
+
+  if [ -n "${unshare_exe:-}" ] && [ -z "${setpriv_exe:-}" ]
+  then
+
+    PATH='/dev/null' "${unshare_exe}" -f"${namespaces}" -- "${sh_exe}" -c "${loopback_down:-} ${proxy}; ${hang:-} exec <&- >&-; exit"
+
+  elif [ -n "${unshare_exe:-}" ]
+  then
+
+    PATH='/dev/null' "${unshare_exe}" -f"${namespaces}" -- "${setpriv_exe}" --bounding-set "-all,${capabilities}" --clear-groups --inh-caps -all --securebits "${securebits}" -- "${sh_exe}" -c "${loopback_down:-} ${proxy}; ${hang:-} exec <&- >&-; exit"
+
+  else
+
+    PATH='/dev/null' "${sh_exe}" -c "${proxy}; ${hang:-} exec <&- >&-; exit"
+
+  fi
+}
+
+
+unlock() {
+
+  exec 9>&-
+}
+
+
+main() {
+
+  config
+
+  log_setup
+
+  #check_installed
+
+  read_client_secret
+
+  shutdown
+
+  set_perms
+
+  get_socket
+
+  tunnel
+}
+
+
+main

@@ -1,0 +1,254 @@
+#!/bin/sh
+#
+#    This file is part of TorSocksRPC.
+#
+#    TorSocksRPC is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU Affero General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    TorSocksRPC is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU Affero General Public License for more details.
+#
+#    You should have received a copy of the GNU Affero General Public License
+#    along with TorSocksRPC.  If not, see <https://www.gnu.org/licenses/>.
+
+#exec 2>>"/var/log/torsockscontrol/torsockscontrol.log"
+#set -o xtrace
+
+set -o errexit -o noclobber -o noglob -o nounset
+
+
+umask 0477
+
+
+clean_env() {
+
+  for env in $(env | cut -d '=' -f 1 -- - | sed -e '/[\ }]/d;/^$/d' -- - )
+  do
+
+    [ "${env}" = 'PATH' ] && continue
+
+    unset "${env}"
+
+  done
+}
+
+
+config() {
+
+  cd '/'
+
+  unset QREXEC_REMOTE_DOMAIN || true
+  unset QREXEC_SERVICE_ARGUMENT || true
+
+  if [ -e '/rw/config/torsockscontrol.conf' ]
+  then
+
+    configfile='/rw/config/torsockscontrol.conf'
+
+  elif [ -e '/etc/qubes/torsockscontrol.conf' ]
+  then
+
+    configfile='/etc/qubes/torsockscontrol.conf'
+
+  elif [ -e '/usr/share/qubes/torsockscontrol.conf' ]
+  then
+
+    configfile='/usr/share/qubes/torsockscontrol.conf'
+
+  fi
+
+  if [ -n "${configfile:-}" ]
+  then
+
+    config="$(cat -- ${configfile} | grep -e '^[a-zA-Z]' -- - | tr ' ' '=')"
+
+    for pair in $(printf '%b\n' "${config}")
+    do
+
+      readonly ${pair}
+
+    done
+
+  fi
+
+  unset config configfile || true
+}
+
+
+log_error() {
+
+  if [ "${2:-}" != 'mac' ] || [ "${mac:-1}" -eq 0 ]
+  then
+
+    printf '%b\n' "${1}" >>"${logfile}"
+
+    exit 1
+    return 1
+
+  elif [ "${mac:-1}" -eq 1 ] && [ "${2:-}" = 'mac' ] && [ -n "${3:-}" ]
+  then
+
+    log_warning "${1} MAC is enabled, and so different priviliges between ${3} and ${0} are assumed in place of an error."
+
+  elif [ "${mac:-1}" -eq 1 ] && [ "${2:-}" = 'mac' ]
+  then
+
+    log_warning "${1} Permission on this object must be enabled for ${0}.  You may need to change your policy."
+
+  fi
+}
+
+
+log_info() {
+
+  if [ "${testing:-0}" -eq 1 ]
+  then
+
+    printf '%b\n' "${1}" >>"${logfile}"
+
+  fi
+}
+
+
+log_setup() {
+
+  [ -z "${logdir:-}" ] && readonly logdir='/var/log/torsockscontrol'
+
+  if [ "${notraces:-1}" -eq 1 ] && [ "${testing:-0}" -eq 0 ]
+  then
+
+    readonly logfile='/dev/null'
+
+  elif [ "${splitlog:-0}" -eq 0 ]
+  then
+
+    readonly logfile="${logdir}/torsockscontrol.log"
+
+    [ -e "${logdir}" ] || mkdir -m 0300 -- "${logdir}"
+    [ -e "${logfile}" ] || touch -- "${logfile}"
+
+  else
+
+    readonly logfile="${logdir}/torsockscontrol-${$}.log"
+
+    [ -e "${logdir}" ] || mkdir -m 0300 -- "${logdir}"
+    [ -e "${logfile}" ] || touch -- "${logfile}"
+
+  fi
+
+  exec 2>> "${logfile}"
+
+  if [ "${testing:-0}" -eq 1 ]
+  then
+
+    set -o xtrace
+
+    [ -n "${hangtime:-}" ] || readonly hangtime='2m'
+
+  else
+
+    [ -n "${hangtime:-}" ] || readonly hangtime='0'
+
+  fi
+}
+
+
+log_warning() {
+
+  printf '%b\n' "${1}" >>"${logfile}"
+}
+
+
+prepare() {
+
+  [ -z "${chroot_dir:-}" ] && readonly chroot_dir='/var/run/torsockscontrol'
+
+  if ! [ -e "${chroot_dir}" ]
+  then
+
+    mkdir -m 0100 -- "${chroot_dir}" || log_error 'Unable to create chroot directory.'
+
+  fi
+}
+
+
+set_perms() {
+
+  [ -z "${user:-}" ] && readonly user='torsockscontrol'
+
+  #if [ "${setperms:-0}" -ne 0 ]
+  #then
+  #
+  #  setfacl -m "u:${user}:x" -- "${chroot_dir}/" || log_error "Unable to add ACL to ${chroot_dir}/."
+  #
+  #fi
+}
+
+
+tunnel() {
+
+  [ "${hangtime}" = '0' ] || [ -z "${sleep_exe:-}" ] && readonly sleep_exe="$(command -v sleep)"
+  [ -z "${setpriv_exe:-}" ] && readonly setpriv_exe="$(command -v setpriv 2>>/dev/null)"
+  [ -z "${sh_exe:-}" ] && readonly sh_exe="$(command -v sh)"
+  [ -z "${socat_exe:-}" ] && readonly socat_exe="$(command -v socat 2>>/dev/null)"
+  [ -z "${unshare_exe:-}" ] && readonly unshare_exe="$(command -v unshare 2>>/dev/null)"
+
+  [ -n "${setpriv_exe:-}" ] && readonly capabilities='+setgid,+setuid,+sys_chroot'
+  [ -n "${setpriv_exe:-}" ] && readonly securebits='+keep_caps_locked,+no_setuid_fixup,+no_setuid_fixup_locked'
+  # AppArmor cannot track files across mount namespaces: "Failed name lookup - disconnected path"
+  #[ -n "${unshare_exe:-}" ] && readonly namespaces='impu'
+  [ -n "${unshare_exe:-}" ] && readonly namespaces='ipu'
+
+  #[ -z "${ip:-}" ] && ip="$(qubesdb-read /qubes-netvm-network)" && readonly ip="${ip%0}1"
+  set +o noglob
+  [ -z "${ip:-}" ] && readonly ip="$(cat -- /etc/cpfpy.d/*.conf | grep -e '^CONTROL_PORT_FILTER_IP=' -- - | tail -n 1 -- - | cut -d '=' -f 2 -- -)"
+  set -o noglob
+  [ -z "${port:-}" ] && readonly port='9052'
+  [ -z "${timeout:-}" ] && readonly timeout='16'
+
+
+  clean_env
+
+
+  [ "${hangtime}" = '0' ] || readonly hang="${sleep_exe} ${hangtime};"
+
+  readonly proxy="${socat_exe} -T ${timeout} '-,chroot='${chroot_dir}',su-d='${user} 'TCP:'${ip}':'${port}',dontroute,reuseaddr,type=1'"
+
+
+  if [ -n "${unshare_exe:-}" ] && [ -z "${setpriv_exe:-}" ]
+  then
+
+    PATH='/dev/null' "${unshare_exe}" -f"${namespaces}" -- "${sh_exe}" -c "${proxy}; ${hang:-} exec <&- >&-; exit"
+
+  elif [ -n "${unshare_exe:-}" ] && [ -n "${setpriv_exe:-}" ]
+  then
+
+    PATH='/dev/null' "${unshare_exe}" -f"${namespaces}" -- "${setpriv_exe}" --bounding-set "-all,${capabilities}" --clear-groups --inh-caps -all --securebits "${securebits}" -- "${sh_exe}" -c "${proxy}; ${hang:-} exec <&- >&-; exit"
+
+  else
+
+    PATH='/dev/null' "${sh_exe}" -c "${proxy}; ${hang:-} exec <&- >&-; exit"
+
+  fi
+}
+
+
+main() {
+
+  config
+
+  log_setup
+
+  prepare
+
+  set_perms
+
+  tunnel
+}
+
+
+main
